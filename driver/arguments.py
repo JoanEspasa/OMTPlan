@@ -54,7 +54,11 @@ def parse_args():
 
     parser.add_argument('-linear', action='store_true', help='Builds a sequential encoding.')
 
-    parser.add_argument('-parallel', action='store_true', help='Builds a parallel encoding.')
+    parser.add_argument('-parallel', action='store_true', help='Builds a parallel encoding with forall-step semantics.')
+
+    parser.add_argument('-r2e', action='store_true', help='Builds a parallel encoding with R2E semenatics.')
+
+    parser.add_argument('-cr2e', action='store_true', help='Builds a parallel encoding with R2E semenatics and Chronological search.')
 
     parser.add_argument('-translate', type=int, help='Builds planning formula without solving. ')
 
@@ -63,8 +67,6 @@ def parse_args():
     parser.add_argument('-omt', action='store_true', help='Enables OMT encoding.')
 
     parser.add_argument('-smt', action='store_true', help='Enables SMT encoding.')
-
-    parser.add_argument('-r2e', action='store_true', help='Enables R2E encoding.')
 
     parser.add_argument('-b', type=int, default=bound, help='Upper bound for OMTPlan search.')
 

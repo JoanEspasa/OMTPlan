@@ -109,6 +109,9 @@ def main(BASE_DIR):
                         f.write('\n')
         exit()
 
+    # TODO: redo all of this: need to make sure an encoding and search strategy
+    # are selected Now those two are not differentiated
+
     # Compose encoder and search
     # according to user flags
     if not args.parallel and not args.linear:
@@ -150,6 +153,7 @@ def main(BASE_DIR):
         else:
             s = search.SearchOMT(e, args.b)
             plan = s.do_search()
+
     elif args.r2e:
         e = encoder.R2EEncoding(task)
         if args.translate:
@@ -158,6 +162,16 @@ def main(BASE_DIR):
         else:
             s = search.SearchR2E(e, args.b)
             plan = s.do_search()
+
+    elif args.cr2e:
+        e = encoder.R2EEncoding(task)
+        if args.translate:
+            formula = e.encode(args.translate)
+            utils.printR2EFormula(formula, task.name, BASE_DIR)
+        else:
+            s = search.ChronologicalSearchR2E(e, args.b)
+            plan = s.do_search()
+
     else:
         print('No solving technique specified, choose between SMT or OMT.')
         print('Exiting now...')
