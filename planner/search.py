@@ -44,12 +44,19 @@ class ChronologicalHeuristic(UserPropagateBase):
         UserPropagateBase.__init__(self, s, ctx)
 
         self.var2idx = {} # A map from variables to idxs (where they are located)
+        self.idx2var = {} # A map from idxs to vars
         self.ordered_actions = [] # The action Boolean variables, sorted in chronological order
         self.decided_actions = [] # An array of 0/1 variables, stating if the corresponding action has been decided upon
         self.next_decision_ptr = 0 # The idx of the next variable to decide on
 
+        self.trail = [] # enqueue all the "undo's" here :)
+        self.lim = []
+
         self.add_fixed(self._fixed)
         self.add_final(self._final)
+
+        # TODO: can we start deciding on this?
+        #self.next_split(self.ordered_actions[self.next_decision_ptr], 1, 0)
 
         # TODO : decide is not fully implemented on 4.12.2 (it is half-done on master branch?)
         # Therefore we take an alternative approach: we call next_split in
@@ -57,26 +64,33 @@ class ChronologicalHeuristic(UserPropagateBase):
         #self.add_decide(self._decide)
 
     def _print(self):
-        print(self.ordered_actions)
-        print(self.decided_actions)
-        print(self.next_decision_ptr)
-        print(f"next decision on action {self.next_decision_ptr}: {self.ordered_actions[self.next_decision_ptr]}")
+        print(f"next_ptr:{self.next_decision_ptr}")
+        #print(f"trail({len(self.trail)}): {self.trail}")
+        print(f"trail({len(self.trail)})")
+        print(f"decided_actions: {self.decided_actions}")
+        print(f"lim({len(self.lim)}): {self.lim}")
 
     def register_action(self, horizon, name, var):
         self.add(var) # we register the action first
         self.var2idx[var] = len(self.ordered_actions)
+        self.idx2var[len(self.ordered_actions)] = var
         self.ordered_actions.append(var)
         self.decided_actions.append(0)
 
     def _fixed(self, x, v):
-        print("fixed: ", x, " := ", v)
+        # append an easy way to undo it to the trail
+        self.trail.append(lambda : self.undo(self.var2idx[x]))
 
+        # we apply the consequences of the decision
         self.decided_actions[self.var2idx[x]] = 1
         self.next_decision_ptr += 1
-        #self.next_split(t, idx, phase)
-        # let Z3 decide the phase
+
+        print("fixed: ", x, " := ", v)
+        self._print()
+        # now finally lets assign the next variable to be decided upon.
+        # setting the phase to 0 means that we let Z3 decide the phase (true/false)
         # TODO: decide on a non-decided variable!
-        self.next_split(self.ordered_actions[self.next_decision_ptr], 1, 0)
+        #self.next_split(self.ordered_actions[self.next_decision_ptr], 1, 0)
 
     def _final(self):
         #print("finished")
@@ -85,14 +99,44 @@ class ChronologicalHeuristic(UserPropagateBase):
     #def _decide(self, t, idx, phase):
     #    print(f"deciding on {t}?")
 
-    """ Overrides a base class method """
+    """
+    As I understand, push gets called every propagation/decision.
+    Therefore, if the solver has to backjump, we have to point towards what state we jump to.
+    That is, how many decisions we have to undo. The trail contains the functions that "undos"
+    any decision that we have made.
+
+    Note this method overrides a base class method
+    """
     def push(self):
-        pass#print("push!")
+        print("push onto lim the place where the last decision happened")
+        self.lim.append(len(self.trail))
 
-    """ Overrides a base class method """
+    """
+    A function that undos a decision.
+    We basically set an action variable to "not decided" and as we assume that we're proceeding chronologically
+    that is the next variable that we want the solver to decide on.
+    I don't think it makes a lot of sense right now, as we backtrack on conflicts, and conflicts in CDCL do not
+    generate a new branch, they generate a new unit propagation (as we have learned a new clause)
+    """
+    def undo(self, old_ptr):
+        print(f"undoing decision on {old_ptr} -> {self.idx2var[old_ptr]}")
+        self.next_decision_ptr = old_ptr
+        self.decided_actions[old_ptr] = 0
+
+    """
+    After conflict analysis, pop undos the last num_scopes decisions.
+    We basically keep popping form the trail and executing undos to "rewind" anything done.
+
+    Overrides a base class method
+    """
     def pop(self, num_scopes):
-        print(f"pop! {num_scopes}")
-
+        lim_sz = len(self.lim) - num_scopes # where we need to stop popping scopes
+        trail_sz = self.lim[lim_sz]
+        print(f"pop {num_scopes} scopes, or basically backjump to {trail_sz}")
+        while len(self.trail) > trail_sz:
+            fn = self.trail.pop()
+            fn()
+        self.lim = self.lim[0:lim_sz]
 
 class Search():
     """
