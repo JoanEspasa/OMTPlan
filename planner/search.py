@@ -39,6 +39,9 @@ class ChronologicalHeuristic(UserPropagateBase):
     - When we're getting a Decide() (the solver has decided on a variable)
       update the pointer if needed
       call NextSplit() on the chronologically first non-assigned variable
+
+    How to use the last Z3 version from python easily
+    https://github.com/Z3Prover/z3/discussions/6817
     """
     def __init__(self, s=None, ctx=None):
         UserPropagateBase.__init__(self, s, ctx)
@@ -46,8 +49,7 @@ class ChronologicalHeuristic(UserPropagateBase):
         self.var2idx = {} # A map from variables to idxs (where they are located)
         self.idx2var = {} # A map from idxs to vars
         self.ordered_actions = [] # The action Boolean variables, sorted in chronological order
-        self.decided_actions = [] # An array of 0/1 variables, stating if the corresponding action has been decided upon
-        self.next_decision_ptr = 0 # The idx of the next variable to decide on
+        self.actions_value   = [] # An array of 0/1/-1 variables, stating if the action is executed or not (or undecided)
 
         self.trail = [] # enqueue all the "undo's" here :)
         self.lim = []
@@ -63,11 +65,13 @@ class ChronologicalHeuristic(UserPropagateBase):
         #self.decide = None
         #self.add_decide(self._decide)
 
+    #def _decide(self):
+    #    pass
+
     def _print(self):
-        print(f"next_ptr:{self.next_decision_ptr}")
         #print(f"trail({len(self.trail)}): {self.trail}")
         print(f"trail({len(self.trail)})")
-        print(f"decided_actions: {self.decided_actions}")
+        print(f"actions_value: {self.actions_value}")
         print(f"lim({len(self.lim)}): {self.lim}")
 
     def register_action(self, horizon, name, var):
@@ -75,17 +79,19 @@ class ChronologicalHeuristic(UserPropagateBase):
         self.var2idx[var] = len(self.ordered_actions)
         self.idx2var[len(self.ordered_actions)] = var
         self.ordered_actions.append(var)
-        self.decided_actions.append(0)
+        self.actions_value.append(2)
 
     def _fixed(self, x, v):
+        print(f"fixed: {x}({self.var2idx[x]}) := {v}")
         # append an easy way to undo it to the trail
         self.trail.append(lambda : self.undo(self.var2idx[x]))
 
         # we apply the consequences of the decision
-        self.decided_actions[self.var2idx[x]] = 1
-        self.next_decision_ptr += 1
+        if v:
+            self.actions_value[self.var2idx[x]] = 1
+        else:
+            self.actions_value[self.var2idx[x]] = 0
 
-        print("fixed: ", x, " := ", v)
         self._print()
         # now finally lets assign the next variable to be decided upon.
         # setting the phase to 0 means that we let Z3 decide the phase (true/false)
@@ -108,7 +114,7 @@ class ChronologicalHeuristic(UserPropagateBase):
     Note this method overrides a base class method
     """
     def push(self):
-        print("push onto lim the place where the last decision happened")
+        #print("push onto lim the place where the last decision happened")
         self.lim.append(len(self.trail))
 
     """
@@ -119,9 +125,8 @@ class ChronologicalHeuristic(UserPropagateBase):
     generate a new branch, they generate a new unit propagation (as we have learned a new clause)
     """
     def undo(self, old_ptr):
-        print(f"undoing decision on {old_ptr} -> {self.idx2var[old_ptr]}")
-        self.next_decision_ptr = old_ptr
-        self.decided_actions[old_ptr] = 0
+        #print(f"undoing decision on {old_ptr} -> {self.idx2var[old_ptr]}")
+        self.actions_value[old_ptr] = 2 # reset the value
 
     """
     After conflict analysis, pop undos the last num_scopes decisions.
@@ -132,11 +137,13 @@ class ChronologicalHeuristic(UserPropagateBase):
     def pop(self, num_scopes):
         lim_sz = len(self.lim) - num_scopes # where we need to stop popping scopes
         trail_sz = self.lim[lim_sz]
-        print(f"pop {num_scopes} scopes, or basically backjump to {trail_sz}")
+        #print(f"pop {num_scopes} scopes, or basically backjump to {trail_sz}")
         while len(self.trail) > trail_sz:
             fn = self.trail.pop()
             fn()
         self.lim = self.lim[0:lim_sz]
+
+
 
 class Search():
     """
@@ -345,17 +352,24 @@ class ChronologicalSearchR2E(Search):
     """
     Class that implements linear search using the R2E encoding
     It also adds a UserPropagator to search chronologically
+    The search changes from the usual R2E by using assumptions instead of push/pop
+    ref: https://stackoverflow.com/questions/16422018/how-incremental-solving-works-in-z3
+
+    According to Nikolaj,
+    After search completes learned clauses that don't contain the assumptions
+    are thus independent of them and can be reused in the next SAT call. This is
+    different from push/pop where all learned clauses under a push are removed.
     """
     def do_search(self):
         self.horizon = 1
-        solver = SimpleSolver()
+        solver = Solver()
         up = ChronologicalHeuristic(solver)
+        asserted_zero = False
 
         while self.horizon < self.ub :
-
             print(f'Checking horizon: {self.horizon}/{self.ub }')
-            # Build planning subformulas
 
+            # Build planning subformulas
             formula, all_formula =  self.encoder.incremental_encoding(self.horizon)
 
             # Assert subformulas in solver
@@ -363,33 +377,35 @@ class ChronologicalSearchR2E(Search):
                 if not k in ['goal']:
                     solver.add(v)
 
-            # Now create a new instance of the solver and add the goal.
-            solver.push()
+            # Now create a Boolean variable for assuming the goal
+            g = z3.Bool(f"g{self.horizon}")
+            solver.add(Implies(g, And(formula['goal']))) # Add the goal
 
-            # Add the goal
-            solver.add(formula['goal'])
-
-            # register all action variables for the UserPropagator
+            # first step it adds 0 and 1 to the formula, so we need to "special case" it
+            if not asserted_zero:
+                asserted_zero = True
+                for name, var in self.encoder.action_variables[0].items():
+                    up.register_action(0, name, var)
+            # now continue registering all action variables for the UserPropagator
             # This needs to be done after the variables have been created in the solver
             for name, var in self.encoder.action_variables[self.horizon].items():
                 up.register_action(self.horizon, name, var)
 
-            # Check for satisfiability
-            res = solver.check()
+            # Check for satisfiability, assuming the goal literal
+            res = solver.check(g)
 
             if res == sat:
                 self.found = True
                 self.encoder.horizon = self.horizon
                 break
             else:
-                # Remove the old goal formula
-                solver.pop()
                 # Increment horizon until we find a solution
                 self.horizon = self.horizon + 1
 
         if self.found:
             # Extract plan from model
             model = solver.model()
+
             self.solution = plan.Plan(model, self.encoder)
             if not self.solution.validate():
                 raise Exception('R2E: Plan found invalid!')
