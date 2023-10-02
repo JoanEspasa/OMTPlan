@@ -51,25 +51,21 @@ class ChronologicalHeuristic(UserPropagateBase):
         self.ordered_actions = [] # The action Boolean variables, sorted in chronological order
         self.actions_value   = [] # An array of 0/1/-1 variables, stating if the action is executed or not (or undecided)
 
+        # forwards, backwards, none
+        self.heuristic = "forwards" # > 600
+        self.heuristic = "none" # 205 -
+        self.heuristic = "backwards" # 358
+        self.next_decision_var = 0
+
         self.trail = [] # enqueue all the "undo's" here :)
         self.lim = []
 
         self.add_fixed(self._fixed)
         self.add_final(self._final)
 
-        # TODO: can we start deciding on this?
-        #self.next_split(self.ordered_actions[self.next_decision_ptr], 1, 0)
-
-        # TODO : decide is not fully implemented on 4.12.2 (it is half-done on master branch?)
-        # Therefore we take an alternative approach: we call next_split in
-        #self.decide = None
-        #self.add_decide(self._decide)
-
-    #def _decide(self):
-    #    pass
-
     def _print(self):
         #print(f"trail({len(self.trail)}): {self.trail}")
+        #print(f"next var: {self.idx2var[self.next_var]}({self.next_var})")
         print(f"trail({len(self.trail)})")
         print(f"actions_value: {self.actions_value}")
         print(f"lim({len(self.lim)}): {self.lim}")
@@ -81,8 +77,12 @@ class ChronologicalHeuristic(UserPropagateBase):
         self.ordered_actions.append(var)
         self.actions_value.append(2)
 
+        # we set the next decision var as the last added one, as it is closer to
+        # the goal
+        self.next_decision_var = self.var2idx[var]
+
     def _fixed(self, x, v):
-        print(f"fixed: {x}({self.var2idx[x]}) := {v}")
+        #print(f"fixed: {x}({self.var2idx[x]}) := {v}")
         # append an easy way to undo it to the trail
         self.trail.append(lambda : self.undo(self.var2idx[x]))
 
@@ -92,18 +92,40 @@ class ChronologicalHeuristic(UserPropagateBase):
         else:
             self.actions_value[self.var2idx[x]] = 0
 
-        self._print()
+        #self._print()
         # now finally lets assign the next variable to be decided upon.
         # setting the phase to 0 means that we let Z3 decide the phase (true/false)
-        # TODO: decide on a non-decided variable!
-        #self.next_split(self.ordered_actions[self.next_decision_ptr], 1, 0)
+        # true 1, false -1, 0 whatever
+        self.next_decision_var = self.get_next_var()
+        if self.next_decision_var is not None:
+            self.next_split(self.ordered_actions[self.next_decision_var], 1, -1)
+
+    def get_next_var(self):
+        # get the action closest to the goal that is not decided upon
+        def get_last_index(l, x):
+            reversed_list = reversed(l)
+            index = next((i for i, v in enumerate(reversed_list) if v == x), -1)
+            if index == -1:
+                return None
+            return len(l) - index - 1
+
+        def get_first_index(l, x):
+            return l.index(x)
+
+        if self.heuristic == "backwards":
+            return get_last_index(self.actions_value, 2)
+        if self.heuristic == "forwards":
+            try:
+                return get_first_index(self.actions_value, 2)
+            except:
+                return None
+        if self.heuristic == "none":
+            return None
 
     def _final(self):
         #print("finished")
-        self._print()
-
-    #def _decide(self, t, idx, phase):
-    #    print(f"deciding on {t}?")
+        #self._print()
+        pass
 
     """
     As I understand, push gets called every propagation/decision.
